@@ -122,10 +122,11 @@ describe('ngBind*', function() {
 
   describe('ngBindHtml', function() {
 
-    it('should add ng-binding class to the element in compile phase', inject(function($compile) {
-      var element = jqLite('<div ng-bind-html="myHtml"></div>');
-      $compile(element);
-      expect(element.hasClass('ng-binding')).toBe(true);
+    it('should complain about accidental use of interpolation', inject(function($compile) {
+      expect(function() {
+        $compile('<div ng-bind-html="{{myHtml}}"></div>');
+      }).toThrowMinErr('$parse', 'syntax',
+        "Syntax Error: Token '{' invalid key at column 2 of the expression [{{myHtml}}] starting at [{myHtml}}]");
     }));
 
 
@@ -159,13 +160,13 @@ describe('ngBind*', function() {
       it('should NOT set html for untrusted values', inject(function($rootScope, $compile) {
         element = $compile('<div ng-bind-html="html"></div>')($rootScope);
         $rootScope.html = '<div onclick="">hello</div>';
-        expect($rootScope.$digest).toThrow();
+        expect(function() { $rootScope.$digest(); }).toThrow();
       }));
 
       it('should NOT set html for wrongly typed values', inject(function($rootScope, $compile, $sce) {
         element = $compile('<div ng-bind-html="html"></div>')($rootScope);
         $rootScope.html = $sce.trustAsCss('<div onclick="">hello</div>');
-        expect($rootScope.$digest).toThrow();
+        expect(function() { $rootScope.$digest(); }).toThrow();
       }));
 
       it('should set html for trusted values', inject(function($rootScope, $compile, $sce) {

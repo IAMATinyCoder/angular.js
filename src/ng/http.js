@@ -1,5 +1,112 @@
 'use strict';
 
+var APPLICATION_JSON = 'application/json';
+var CONTENT_TYPE_APPLICATION_JSON = {'Content-Type': APPLICATION_JSON + ';charset=utf-8'};
+var JSON_START = /^\[|^\{(?!\{)/;
+var JSON_ENDS = {
+  '[': /]$/,
+  '{': /}$/
+};
+var JSON_PROTECTION_PREFIX = /^\)\]\}',?\n/;
+
+function serializeValue(v) {
+  if (isObject(v)) {
+    return isDate(v) ? v.toISOString() : toJson(v);
+  }
+  return v;
+}
+
+
+function $HttpParamSerializerProvider() {
+  /**
+   * @ngdoc service
+   * @name $httpParamSerializer
+   * @description
+   *
+   * Default $http params serializer that converts objects to a part of a request URL
+   * according to the following rules:
+   * * `{'foo': 'bar'}` results in `foo=bar`
+   * * `{'foo': Date.now()}` results in `foo=2015-04-01T09%3A50%3A49.262Z` (`toISOString()` and encoded representation of a Date object)
+   * * `{'foo': ['bar', 'baz']}` results in `foo=bar&foo=baz` (repeated key for each array element)
+   * * `{'foo': {'bar':'baz'}}` results in `foo=%7B%22bar%22%3A%22baz%22%7D"` (stringified and encoded representation of an object)
+   * */
+  this.$get = function() {
+    return function ngParamSerializer(params) {
+      if (!params) return '';
+      var parts = [];
+      forEachSorted(params, function(value, key) {
+        if (value === null || isUndefined(value)) return;
+        if (isArray(value)) {
+          forEach(value, function(v, k) {
+            parts.push(encodeUriQuery(key)  + '=' + encodeUriQuery(serializeValue(v)));
+          });
+        } else {
+          parts.push(encodeUriQuery(key) + '=' + encodeUriQuery(serializeValue(value)));
+        }
+      });
+
+      return parts.join('&');
+    };
+  };
+}
+
+function $HttpParamSerializerJQLikeProvider() {
+  /**
+   * @ngdoc service
+   * @name $httpParamSerializerJQLike
+   * @description
+   *
+   * Alternative $http params serializer that follows jQuery's [`param()`](http://api.jquery.com/jquery.param/) method logic.
+   * */
+  this.$get = function() {
+    return function jQueryLikeParamSerializer(params) {
+      if (!params) return '';
+      var parts = [];
+      serialize(params, '', true);
+      return parts.join('&');
+
+      function serialize(toSerialize, prefix, topLevel) {
+        if (toSerialize === null || isUndefined(toSerialize)) return;
+        if (isArray(toSerialize)) {
+          forEach(toSerialize, function(value) {
+            serialize(value, prefix + '[]');
+          });
+        } else if (isObject(toSerialize) && !isDate(toSerialize)) {
+          forEachSorted(toSerialize, function(value, key) {
+            serialize(value, prefix +
+                (topLevel ? '' : '[') +
+                key +
+                (topLevel ? '' : ']'));
+          });
+        } else {
+          parts.push(encodeUriQuery(prefix) + '=' + encodeUriQuery(serializeValue(toSerialize)));
+        }
+      }
+    };
+  };
+}
+
+function defaultHttpResponseTransform(data, headers) {
+  if (isString(data)) {
+    // Strip json vulnerability protection prefix and trim whitespace
+    var tempData = data.replace(JSON_PROTECTION_PREFIX, '').trim();
+
+    if (tempData) {
+      var contentType = headers('Content-Type');
+      if ((contentType && (contentType.indexOf(APPLICATION_JSON) === 0)) || isJsonLike(tempData)) {
+        data = fromJson(tempData);
+      }
+    }
+  }
+
+  return data;
+}
+
+function isJsonLike(str) {
+    var jsonStart = str.match(JSON_START);
+    return jsonStart && JSON_ENDS[jsonStart[0]].test(str);
+}
+
 /**
  * Parse headers into key value object
  *
@@ -7,19 +114,24 @@
  * @returns {Object} Parsed headers as key value object
  */
 function parseHeaders(headers) {
-  var parsed = {}, key, val, i;
+  var parsed = createMap(), i;
 
-  if (!headers) return parsed;
-
-  forEach(headers.split('\n'), function(line) {
-    i = line.indexOf(':');
-    key = lowercase(trim(line.substr(0, i)));
-    val = trim(line.substr(i + 1));
-
+  function fillInParsed(key, val) {
     if (key) {
       parsed[key] = parsed[key] ? parsed[key] + ', ' + val : val;
     }
-  });
+  }
+
+  if (isString(headers)) {
+    forEach(headers.split('\n'), function(line) {
+      i = line.indexOf(':');
+      fillInParsed(lowercase(trim(line.substr(0, i))), trim(line.substr(i + 1)));
+    });
+  } else if (isObject(headers)) {
+    forEach(headers, function(headerVal, headerKey) {
+      fillInParsed(lowercase(headerKey), trim(headerVal));
+    });
+  }
 
   return parsed;
 }
@@ -38,13 +150,17 @@ function parseHeaders(headers) {
  *   - if called with no arguments returns an object containing all headers.
  */
 function headersGetter(headers) {
-  var headersObj = isObject(headers) ? headers : undefined;
+  var headersObj;
 
   return function(name) {
     if (!headersObj) headersObj =  parseHeaders(headers);
 
     if (name) {
-      return headersObj[lowercase(name)] || null;
+      var value = headersObj[lowercase(name)];
+      if (value === void 0) {
+        value = null;
+      }
+      return value;
     }
 
     return headersObj;
@@ -58,16 +174,18 @@ function headersGetter(headers) {
  * This function is used for both request and response transforming
  *
  * @param {*} data Data to transform.
- * @param {function(string=)} headers Http headers getter fn.
+ * @param {function(string=)} headers HTTP headers getter fn.
+ * @param {number} status HTTP status code of the response.
  * @param {(Function|Array.<Function>)} fns Function or an array of functions.
  * @returns {*} Transformed data.
  */
-function transformData(data, headers, fns) {
-  if (isFunction(fns))
-    return fns(data, headers);
+function transformData(data, headers, status, fns) {
+  if (isFunction(fns)) {
+    return fns(data, headers, status);
+  }
 
   forEach(fns, function(fn) {
-    data = fn(data, headers);
+    data = fn(data, headers, status);
   });
 
   return data;
@@ -86,17 +204,17 @@ function isSuccess(status) {
  * Use `$httpProvider` to change the default behavior of the {@link ng.$http $http} service.
  * */
 function $HttpProvider() {
-  var JSON_START = /^\s*(\[|\{[^\{])/,
-      JSON_END = /[\}\]]\s*$/,
-      PROTECTION_PREFIX = /^\)\]\}',?\n/,
-      CONTENT_TYPE_APPLICATION_JSON = {'Content-Type': 'application/json;charset=utf-8'};
-
   /**
    * @ngdoc property
    * @name $httpProvider#defaults
    * @description
    *
    * Object containing default values for all {@link ng.$http $http} requests.
+   *
+   * - **`defaults.cache`** - {Object} - an object built with {@link ng.$cacheFactory `$cacheFactory`}
+   * that will provide the cache for all requests who set their `cache` property to `true`.
+   * If you set the `default.cache = false` then only requests that specify their own custom
+   * cache object will be cached. See {@link $http#caching $http Caching} for more information.
    *
    * - **`defaults.xsrfCookieName`** - {string} - Name of cookie containing the XSRF token.
    * Defaults value is `'XSRF-TOKEN'`.
@@ -111,22 +229,20 @@ function $HttpProvider() {
    *     - **`defaults.headers.post`**
    *     - **`defaults.headers.put`**
    *     - **`defaults.headers.patch`**
+   *
+   * - **`defaults.paramSerializer`** - {string|function(Object<string,string>):string} - A function used to prepare string representation
+   * of request parameters (specified as an object).
+   * If specified as string, it is interpreted as a function registered with the {@link auto.$injector $injector}.
+   * Defaults to {@link ng.$httpParamSerializer $httpParamSerializer}.
+   *
    **/
   var defaults = this.defaults = {
     // transform incoming response data
-    transformResponse: [function(data) {
-      if (isString(data)) {
-        // strip json vulnerability protection prefix
-        data = data.replace(PROTECTION_PREFIX, '');
-        if (JSON_START.test(data) && JSON_END.test(data))
-          data = fromJson(data);
-      }
-      return data;
-    }],
+    transformResponse: [defaultHttpResponseTransform],
 
     // transform outgoing request data
     transformRequest: [function(d) {
-      return isObject(d) && !isFile(d) && !isBlob(d) ? toJson(d) : d;
+      return isObject(d) && !isFile(d) && !isBlob(d) && !isFormData(d) ? toJson(d) : d;
     }],
 
     // default headers
@@ -140,19 +256,64 @@ function $HttpProvider() {
     },
 
     xsrfCookieName: 'XSRF-TOKEN',
-    xsrfHeaderName: 'X-XSRF-TOKEN'
+    xsrfHeaderName: 'X-XSRF-TOKEN',
+
+    paramSerializer: '$httpParamSerializer'
+  };
+
+  var useApplyAsync = false;
+  /**
+   * @ngdoc method
+   * @name $httpProvider#useApplyAsync
+   * @description
+   *
+   * Configure $http service to combine processing of multiple http responses received at around
+   * the same time via {@link ng.$rootScope.Scope#$applyAsync $rootScope.$applyAsync}. This can result in
+   * significant performance improvement for bigger applications that make many HTTP requests
+   * concurrently (common during application bootstrap).
+   *
+   * Defaults to false. If no value is specified, returns the current configured value.
+   *
+   * @param {boolean=} value If true, when requests are loaded, they will schedule a deferred
+   *    "apply" on the next tick, giving time for subsequent requests in a roughly ~10ms window
+   *    to load and share the same digest cycle.
+   *
+   * @returns {boolean|Object} If a value is specified, returns the $httpProvider for chaining.
+   *    otherwise, returns the current configured value.
+   **/
+  this.useApplyAsync = function(value) {
+    if (isDefined(value)) {
+      useApplyAsync = !!value;
+      return this;
+    }
+    return useApplyAsync;
   };
 
   /**
-   * Are ordered by request, i.e. they are applied in the same order as the
+   * @ngdoc property
+   * @name $httpProvider#interceptors
+   * @description
+   *
+   * Array containing service factories for all synchronous or asynchronous {@link ng.$http $http}
+   * pre-processing of request or postprocessing of responses.
+   *
+   * These service factories are ordered by request, i.e. they are applied in the same order as the
    * array, on request, but reverse order, on response.
-   */
+   *
+   * {@link ng.$http#interceptors Interceptors detailed info}
+   **/
   var interceptorFactories = this.interceptors = [];
 
-  this.$get = ['$httpBackend', '$browser', '$cacheFactory', '$rootScope', '$q', '$injector',
-      function($httpBackend, $browser, $cacheFactory, $rootScope, $q, $injector) {
+  this.$get = ['$httpBackend', '$$cookieReader', '$cacheFactory', '$rootScope', '$q', '$injector',
+      function($httpBackend, $$cookieReader, $cacheFactory, $rootScope, $q, $injector) {
 
     var defaultCache = $cacheFactory('$http');
+
+    /**
+     * Make sure that default param serializer is exposed as a function
+     */
+    defaults.paramSerializer = isString(defaults.paramSerializer) ?
+      $injector.get(defaults.paramSerializer) : defaults.paramSerializer;
 
     /**
      * Interceptors stored in reverse order. Inner interceptors before outer interceptors.
@@ -192,13 +353,14 @@ function $HttpProvider() {
      * it is important to familiarize yourself with these APIs and the guarantees they provide.
      *
      *
-     * # General usage
+     * ## General usage
      * The `$http` service is a function which takes a single argument — a configuration object —
      * that is used to generate an HTTP request and returns  a {@link ng.$q promise}
      * with two $http specific methods: `success` and `error`.
      *
      * ```js
-     *   $http({method: 'GET', url: '/someUrl'}).
+     *   // Simple GET request example :
+     *   $http.get('/someUrl').
      *     success(function(data, status, headers, config) {
      *       // this callback will be called asynchronously
      *       // when the response is available
@@ -208,6 +370,20 @@ function $HttpProvider() {
      *       // or server returns response with an error status.
      *     });
      * ```
+     *
+     * ```js
+     *   // Simple POST request example (passing data) :
+     *   $http.post('/someUrl', {msg:'hello word!'}).
+     *     success(function(data, status, headers, config) {
+     *       // this callback will be called asynchronously
+     *       // when the response is available
+     *     }).
+     *     error(function(data, status, headers, config) {
+     *       // called asynchronously if an error occurs
+     *       // or server returns response with an error status.
+     *     });
+     * ```
+     *
      *
      * Since the returned value of calling the $http function is a `promise`, you can also use
      * the `then` method to register callbacks, and these callbacks will receive a single argument –
@@ -219,7 +395,7 @@ function $HttpProvider() {
      * XMLHttpRequest will transparently follow it, meaning that the error callback will not be
      * called for such responses.
      *
-     * # Writing Unit Tests that use $http
+     * ## Writing Unit Tests that use $http
      * When unit testing (using {@link ngMock ngMock}), it is necessary to call
      * {@link ngMock.$httpBackend#flush $httpBackend.flush()} to flush each pending
      * request using trained responses.
@@ -230,7 +406,7 @@ function $HttpProvider() {
      * $httpBackend.flush();
      * ```
      *
-     * # Shortcut methods
+     * ## Shortcut methods
      *
      * Shortcut methods are also available. All shortcut methods require passing in the URL, and
      * request data must be passed in for POST/PUT requests.
@@ -251,7 +427,7 @@ function $HttpProvider() {
      * - {@link ng.$http#patch $http.patch}
      *
      *
-     * # Setting HTTP Headers
+     * ## Setting HTTP Headers
      *
      * The $http service will automatically add certain HTTP headers to all requests. These defaults
      * can be fully configured by accessing the `$httpProvider.defaults.headers` configuration
@@ -267,7 +443,7 @@ function $HttpProvider() {
      * To add or overwrite these defaults, simply add or remove a property from these configuration
      * objects. To add headers for an HTTP method other than POST or PUT, simply add a new object
      * with the lowercased HTTP method name as the key, e.g.
-     * `$httpProvider.defaults.headers.get = { 'My-Header' : 'value' }.
+     * `$httpProvider.defaults.headers.get = { 'My-Header' : 'value' }`.
      *
      * The defaults can also be set at runtime via the `$http.defaults` object in the same
      * fashion. For example:
@@ -281,37 +457,85 @@ function $HttpProvider() {
      * In addition, you can supply a `headers` property in the config object passed when
      * calling `$http(config)`, which overrides the defaults without changing them globally.
      *
+     * To explicitly remove a header automatically added via $httpProvider.defaults.headers on a per request basis,
+     * Use the `headers` property, setting the desired header to `undefined`. For example:
      *
-     * # Transforming Requests and Responses
+     * ```js
+     * var req = {
+     *  method: 'POST',
+     *  url: 'http://example.com',
+     *  headers: {
+     *    'Content-Type': undefined
+     *  },
+     *  data: { test: 'test' }
+     * }
      *
-     * Both requests and responses can be transformed using transform functions. By default, Angular
-     * applies these transformations:
+     * $http(req).success(function(){...}).error(function(){...});
+     * ```
      *
-     * Request transformations:
+     * ## Transforming Requests and Responses
+     *
+     * Both requests and responses can be transformed using transformation functions: `transformRequest`
+     * and `transformResponse`. These properties can be a single function that returns
+     * the transformed value (`function(data, headersGetter, status)`) or an array of such transformation functions,
+     * which allows you to `push` or `unshift` a new transformation function into the transformation chain.
+     *
+     * ### Default Transformations
+     *
+     * The `$httpProvider` provider and `$http` service expose `defaults.transformRequest` and
+     * `defaults.transformResponse` properties. If a request does not provide its own transformations
+     * then these will be applied.
+     *
+     * You can augment or replace the default transformations by modifying these properties by adding to or
+     * replacing the array.
+     *
+     * Angular provides the following default transformations:
+     *
+     * Request transformations (`$httpProvider.defaults.transformRequest` and `$http.defaults.transformRequest`):
      *
      * - If the `data` property of the request configuration object contains an object, serialize it
      *   into JSON format.
      *
-     * Response transformations:
+     * Response transformations (`$httpProvider.defaults.transformResponse` and `$http.defaults.transformResponse`):
      *
      *  - If XSRF prefix is detected, strip it (see Security Considerations section below).
      *  - If JSON response is detected, deserialize it using a JSON parser.
      *
-     * To globally augment or override the default transforms, modify the
-     * `$httpProvider.defaults.transformRequest` and `$httpProvider.defaults.transformResponse`
-     * properties. These properties are by default an array of transform functions, which allows you
-     * to `push` or `unshift` a new transformation function into the transformation chain. You can
-     * also decide to completely override any default transformations by assigning your
-     * transformation functions to these properties directly without the array wrapper.  These defaults
-     * are again available on the $http factory at run-time, which may be useful if you have run-time
-     * services you wish to be involved in your transformations.
      *
-     * Similarly, to locally override the request/response transforms, augment the
-     * `transformRequest` and/or `transformResponse` properties of the configuration object passed
+     * ### Overriding the Default Transformations Per Request
+     *
+     * If you wish override the request/response transformations only for a single request then provide
+     * `transformRequest` and/or `transformResponse` properties on the configuration object passed
      * into `$http`.
      *
+     * Note that if you provide these properties on the config object the default transformations will be
+     * overwritten. If you wish to augment the default transformations then you must include them in your
+     * local transformation array.
      *
-     * # Caching
+     * The following code demonstrates adding a new response transformation to be run after the default response
+     * transformations have been run.
+     *
+     * ```js
+     * function appendTransform(defaults, transform) {
+     *
+     *   // We can't guarantee that the default transformation is an array
+     *   defaults = angular.isArray(defaults) ? defaults : [defaults];
+     *
+     *   // Append the new transformation to the defaults
+     *   return defaults.concat(transform);
+     * }
+     *
+     * $http({
+     *   url: '...',
+     *   method: 'GET',
+     *   transformResponse: appendTransform($http.defaults.transformResponse, function(value) {
+     *     return doTransform(value);
+     *   })
+     * });
+     * ```
+     *
+     *
+     * ## Caching
      *
      * To enable caching, set the request configuration `cache` property to `true` (to use default
      * cache) or to a custom cache object (built with {@link ng.$cacheFactory `$cacheFactory`}).
@@ -328,13 +552,13 @@ function $HttpProvider() {
      *
      * You can change the default cache to a new object (built with
      * {@link ng.$cacheFactory `$cacheFactory`}) by updating the
-     * {@link ng.$http#properties_defaults `$http.defaults.cache`} property. All requests who set
+     * {@link ng.$http#defaults `$http.defaults.cache`} property. All requests who set
      * their `cache` property to `true` will now use this cache object.
      *
      * If you set the default cache to `false` then only requests that specify their own custom
      * cache object will be cached.
      *
-     * # Interceptors
+     * ## Interceptors
      *
      * Before you start creating interceptors, be sure to understand the
      * {@link ng.$q $q and deferred/promise APIs}.
@@ -419,7 +643,7 @@ function $HttpProvider() {
      *   });
      * ```
      *
-     * # Security Considerations
+     * ## Security Considerations
      *
      * When designing web applications, consider security threats from:
      *
@@ -430,7 +654,7 @@ function $HttpProvider() {
      * pre-configured with strategies that address these issues, but for this to work backend server
      * cooperation is required.
      *
-     * ## JSON Vulnerability Protection
+     * ### JSON Vulnerability Protection
      *
      * A [JSON vulnerability](http://haacked.com/archive/2008/11/20/anatomy-of-a-subtle-json-vulnerability.aspx)
      * allows third party website to turn your JSON resource URL into
@@ -452,7 +676,7 @@ function $HttpProvider() {
      * Angular will strip the prefix, before processing the JSON.
      *
      *
-     * ## Cross Site Request Forgery (XSRF) Protection
+     * ### Cross Site Request Forgery (XSRF) Protection
      *
      * [XSRF](http://en.wikipedia.org/wiki/Cross-site_request_forgery) is a technique by which
      * an unauthorized site can gain your user's private data. Angular provides a mechanism
@@ -468,12 +692,15 @@ function $HttpProvider() {
      * that only JavaScript running on your domain could have sent the request. The token must be
      * unique for each user and must be verifiable by the server (to prevent the JavaScript from
      * making up its own tokens). We recommend that the token is a digest of your site's
-     * authentication cookie with a [salt](https://en.wikipedia.org/wiki/Salt_(cryptography))
+     * authentication cookie with a [salt](https://en.wikipedia.org/wiki/Salt_(cryptography&#41;)
      * for added security.
      *
      * The name of the headers can be specified using the xsrfHeaderName and xsrfCookieName
      * properties of either $httpProvider.defaults at config-time, $http.defaults at run-time,
      * or the per-request config object.
+     *
+     * In order to prevent collisions in environments where multiple Angular apps share the
+     * same domain or subdomain, we recommend that each application uses unique cookie name.
      *
      *
      * @param {object} config Object describing the request to be made and how it should be
@@ -487,17 +714,24 @@ function $HttpProvider() {
      *    - **data** – `{string|Object}` – Data to be sent as the request message data.
      *    - **headers** – `{Object}` – Map of strings or functions which return strings representing
      *      HTTP headers to send to the server. If the return value of a function is null, the
-     *      header will not be sent.
+     *      header will not be sent. Functions accept a config object as an argument.
      *    - **xsrfHeaderName** – `{string}` – Name of HTTP header to populate with the XSRF token.
      *    - **xsrfCookieName** – `{string}` – Name of cookie containing the XSRF token.
      *    - **transformRequest** –
      *      `{function(data, headersGetter)|Array.<function(data, headersGetter)>}` –
      *      transform function or an array of such functions. The transform function takes the http
      *      request body and headers and returns its transformed (typically serialized) version.
+     *      See {@link ng.$http#overriding-the-default-transformations-per-request
+     *      Overriding the Default Transformations}
      *    - **transformResponse** –
-     *      `{function(data, headersGetter)|Array.<function(data, headersGetter)>}` –
+     *      `{function(data, headersGetter, status)|Array.<function(data, headersGetter, status)>}` –
      *      transform function or an array of such functions. The transform function takes the http
-     *      response body and headers and returns its transformed (typically deserialized) version.
+     *      response body, headers and status and returns its transformed (typically deserialized) version.
+     *      See {@link ng.$http#overriding-the-default-transformations-per-request
+     *      Overriding the Default Transformations}
+     *    - **paramSerializer** - {string|function(Object<string,string>):string} - A function used to prepare string representation
+     *      of request parameters (specified as an object).
+     *      Is specified as string, it is interpreted as function registered in with the {$injector}.
      *    - **cache** – `{boolean|Cache}` – If true, a default $http cache will be used to cache the
      *      GET request, otherwise if a cache instance built with
      *      {@link ng.$cacheFactory $cacheFactory}, this cache will be used for
@@ -533,11 +767,11 @@ function $HttpProvider() {
 <example module="httpExample">
 <file name="index.html">
   <div ng-controller="FetchController">
-    <select ng-model="method">
+    <select ng-model="method" aria-label="Request method">
       <option>GET</option>
       <option>JSONP</option>
     </select>
-    <input type="text" ng-model="url" size="80"/>
+    <input type="text" ng-model="url" size="80" aria-label="URL" />
     <button id="fetchbtn" ng-click="fetch()">fetch</button><br>
     <button id="samplegetbtn" ng-click="updateModel('GET', 'http-hello.html')">Sample GET</button>
     <button id="samplejsonpbtn"
@@ -599,12 +833,13 @@ function $HttpProvider() {
     expect(data.getText()).toMatch(/Hello, \$http!/);
   });
 
-  it('should make a JSONP request to angularjs.org', function() {
-    sampleJsonpBtn.click();
-    fetchBtn.click();
-    expect(status.getText()).toMatch('200');
-    expect(data.getText()).toMatch(/Super Hero!/);
-  });
+// Commented out due to flakes. See https://github.com/angular/angular.js/issues/9185
+// it('should make a JSONP request to angularjs.org', function() {
+//   sampleJsonpBtn.click();
+//   fetchBtn.click();
+//   expect(status.getText()).toMatch('200');
+//   expect(data.getText()).toMatch(/Super Hero!/);
+// });
 
   it('should make JSONP request to invalid URL and invoke the error handler',
       function() {
@@ -617,20 +852,26 @@ function $HttpProvider() {
 </example>
      */
     function $http(requestConfig) {
-      var config = {
+
+      if (!angular.isObject(requestConfig)) {
+        throw minErr('$http')('badreq', 'Http request configuration must be an object.  Received: {0}', requestConfig);
+      }
+
+      var config = extend({
         method: 'get',
         transformRequest: defaults.transformRequest,
-        transformResponse: defaults.transformResponse
-      };
-      var headers = mergeHeaders(requestConfig);
+        transformResponse: defaults.transformResponse,
+        paramSerializer: defaults.paramSerializer
+      }, requestConfig);
 
-      extend(config, requestConfig);
-      config.headers = headers;
+      config.headers = mergeHeaders(requestConfig);
       config.method = uppercase(config.method);
+      config.paramSerializer = isString(config.paramSerializer) ?
+        $injector.get(config.paramSerializer) : config.paramSerializer;
 
       var serverRequest = function(config) {
-        headers = config.headers;
-        var reqData = transformData(config.data, headersGetter(headers), config.transformRequest);
+        var headers = config.headers;
+        var reqData = transformData(config.data, headersGetter(headers), undefined, config.transformRequest);
 
         // strip content-type if data is undefined
         if (isUndefined(reqData)) {
@@ -646,7 +887,7 @@ function $HttpProvider() {
         }
 
         // send request
-        return sendReq(config, reqData, headers).then(transformResponse, transformResponse);
+        return sendReq(config, reqData).then(transformResponse, transformResponse);
       };
 
       var chain = [serverRequest, undefined];
@@ -662,7 +903,7 @@ function $HttpProvider() {
         }
       });
 
-      while(chain.length) {
+      while (chain.length) {
         var thenFn = chain.shift();
         var rejectFn = chain.shift();
 
@@ -670,6 +911,8 @@ function $HttpProvider() {
       }
 
       promise.success = function(fn) {
+        assertArgFn(fn, 'fn');
+
         promise.then(function(response) {
           fn(response.data, response.status, response.headers, config);
         });
@@ -677,6 +920,8 @@ function $HttpProvider() {
       };
 
       promise.error = function(fn) {
+        assertArgFn(fn, 'fn');
+
         promise.then(null, function(response) {
           fn(response.data, response.status, response.headers, config);
         });
@@ -687,12 +932,32 @@ function $HttpProvider() {
 
       function transformResponse(response) {
         // make a copy since the response must be cacheable
-        var resp = extend({}, response, {
-          data: transformData(response.data, response.headers, config.transformResponse)
-        });
+        var resp = extend({}, response);
+        if (!response.data) {
+          resp.data = response.data;
+        } else {
+          resp.data = transformData(response.data, response.headers, response.status, config.transformResponse);
+        }
         return (isSuccess(response.status))
           ? resp
           : $q.reject(resp);
+      }
+
+      function executeHeaderFns(headers, config) {
+        var headerContent, processedHeaders = {};
+
+        forEach(headers, function(headerFn, header) {
+          if (isFunction(headerFn)) {
+            headerContent = headerFn(config);
+            if (headerContent != null) {
+              processedHeaders[header] = headerContent;
+            }
+          } else {
+            processedHeaders[header] = headerFn;
+          }
+        });
+
+        return processedHeaders;
       }
 
       function mergeHeaders(config) {
@@ -717,23 +982,7 @@ function $HttpProvider() {
         }
 
         // execute if header value is a function for merged headers
-        execHeaders(reqHeaders);
-        return reqHeaders;
-
-        function execHeaders(headers) {
-          var headerContent;
-
-          forEach(headers, function(headerFn, header) {
-            if (isFunction(headerFn)) {
-              headerContent = headerFn();
-              if (headerContent != null) {
-                headers[header] = headerContent;
-              } else {
-                delete headers[header];
-              }
-            }
-          });
-        }
+        return executeHeaderFns(reqHeaders, shallowCopy(config));
       }
     }
 
@@ -848,7 +1097,7 @@ function $HttpProvider() {
     function createShortMethods(names) {
       forEach(arguments, function(name) {
         $http[name] = function(url, config) {
-          return $http(extend(config || {}, {
+          return $http(extend({}, config || {}, {
             method: name,
             url: url
           }));
@@ -860,7 +1109,7 @@ function $HttpProvider() {
     function createShortMethodsWithData(name) {
       forEach(arguments, function(name) {
         $http[name] = function(url, data, config) {
-          return $http(extend(config || {}, {
+          return $http(extend({}, config || {}, {
             method: name,
             url: url,
             data: data
@@ -876,12 +1125,13 @@ function $HttpProvider() {
      * !!! ACCESSES CLOSURE VARS:
      * $httpBackend, defaults, $log, $rootScope, defaultCache, $http.pendingRequests
      */
-    function sendReq(config, reqData, reqHeaders) {
+    function sendReq(config, reqData) {
       var deferred = $q.defer(),
           promise = deferred.promise,
           cache,
           cachedResp,
-          url = buildUrl(config.url, config.params);
+          reqHeaders = config.headers,
+          url = buildUrl(config.url, config.paramSerializer(config.params));
 
       $http.pendingRequests.push(config);
       promise.then(removePendingReq, removePendingReq);
@@ -899,8 +1149,7 @@ function $HttpProvider() {
         if (isDefined(cachedResp)) {
           if (isPromiseLike(cachedResp)) {
             // cached request has already been sent, but there is no response yet
-            cachedResp.then(removePendingReq, removePendingReq);
-            return cachedResp;
+            cachedResp.then(resolvePromiseWithResult, resolvePromiseWithResult);
           } else {
             // serving from cache
             if (isArray(cachedResp)) {
@@ -920,7 +1169,7 @@ function $HttpProvider() {
       // send the request to the backend
       if (isUndefined(cachedResp)) {
         var xsrfValue = urlIsSameOrigin(config.url)
-            ? $browser.cookies()[config.xsrfCookieName || defaults.xsrfCookieName]
+            ? $$cookieReader()[config.xsrfCookieName || defaults.xsrfCookieName]
             : undefined;
         if (xsrfValue) {
           reqHeaders[(config.xsrfHeaderName || defaults.xsrfHeaderName)] = xsrfValue;
@@ -949,8 +1198,16 @@ function $HttpProvider() {
           }
         }
 
-        resolvePromise(response, status, headersString, statusText);
-        if (!$rootScope.$$phase) $rootScope.$apply();
+        function resolveHttpPromise() {
+          resolvePromise(response, status, headersString, statusText);
+        }
+
+        if (useApplyAsync) {
+          $rootScope.$applyAsync(resolveHttpPromise);
+        } else {
+          resolveHttpPromise();
+          if (!$rootScope.$$phase) $rootScope.$apply();
+        }
       }
 
 
@@ -966,39 +1223,24 @@ function $HttpProvider() {
           status: status,
           headers: headersGetter(headers),
           config: config,
-          statusText : statusText
+          statusText: statusText
         });
       }
 
+      function resolvePromiseWithResult(result) {
+        resolvePromise(result.data, result.status, shallowCopy(result.headers()), result.statusText);
+      }
 
       function removePendingReq() {
-        var idx = indexOf($http.pendingRequests, config);
+        var idx = $http.pendingRequests.indexOf(config);
         if (idx !== -1) $http.pendingRequests.splice(idx, 1);
       }
     }
 
 
-    function buildUrl(url, params) {
-      if (!params) return url;
-      var parts = [];
-      forEachSorted(params, function(value, key) {
-        if (value === null || isUndefined(value)) return;
-        if (!isArray(value)) value = [value];
-
-        forEach(value, function(v) {
-          if (isObject(v)) {
-            if (isDate(v)){
-              v = v.toISOString();
-            } else if (isObject(v)) {
-              v = toJson(v);
-            }
-          }
-          parts.push(encodeUriQuery(key) + '=' +
-                     encodeUriQuery(v));
-        });
-      });
-      if(parts.length > 0) {
-        url += ((url.indexOf('?') == -1) ? '?' : '&') + parts.join('&');
+    function buildUrl(url, serializedParams) {
+      if (serializedParams.length > 0) {
+        url += ((url.indexOf('?') == -1) ? '?' : '&') + serializedParams;
       }
       return url;
     }

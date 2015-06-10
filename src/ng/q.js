@@ -6,47 +6,54 @@
  * @requires $rootScope
  *
  * @description
- * A promise/deferred implementation inspired by [Kris Kowal's Q](https://github.com/kriskowal/q).
+ * A service that helps you run functions asynchronously, and use their return values (or exceptions)
+ * when they are done processing.
  *
- * $q can be used in two fashions --- One, which is more similar to Kris Kowal's Q or jQuery's Deferred
- * implementations, the other resembles ES6 promises to some degree.
+ * This is an implementation of promises/deferred objects inspired by
+ * [Kris Kowal's Q](https://github.com/kriskowal/q).
+ *
+ * $q can be used in two fashions --- one which is more similar to Kris Kowal's Q or jQuery's Deferred
+ * implementations, and the other which resembles ES6 promises to some degree.
  *
  * # $q constructor
  *
  * The streamlined ES6 style promise is essentially just using $q as a constructor which takes a `resolver`
- * function as the first argument). This is similar to the native Promise implementation from ES6 Harmony,
+ * function as the first argument. This is similar to the native Promise implementation from ES6 Harmony,
  * see [MDN](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise).
  *
- * While the constructor-style use is supported, not all of the supporting methods from Harmony promises are
+ * While the constructor-style use is supported, not all of the supporting methods from ES6 Harmony promises are
  * available yet.
  *
  * It can be used like so:
  *
  * ```js
- * return $q(function(resolve, reject) {
- *   // perform some asynchronous operation, resolve or reject the promise when appropriate.
- *   setInterval(function() {
- *     if (pollStatus > 0) {
- *       resolve(polledValue);
- *     } else if (pollStatus < 0) {
- *       reject(polledValue);
- *     } else {
- *       pollStatus = pollAgain(function(value) {
- *         polledValue = value;
- *       });
- *     }
- *   }, 10000);
- * }).
- *   then(function(value) {
- *     // handle success
+ *   // for the purpose of this example let's assume that variables `$q` and `okToGreet`
+ *   // are available in the current lexical scope (they could have been injected or passed in).
+ *
+ *   function asyncGreet(name) {
+ *     // perform some asynchronous operation, resolve or reject the promise when appropriate.
+ *     return $q(function(resolve, reject) {
+ *       setTimeout(function() {
+ *         if (okToGreet(name)) {
+ *           resolve('Hello, ' + name + '!');
+ *         } else {
+ *           reject('Greeting ' + name + ' is not allowed.');
+ *         }
+ *       }, 1000);
+ *     });
+ *   }
+ *
+ *   var promise = asyncGreet('Robin Hood');
+ *   promise.then(function(greeting) {
+ *     alert('Success: ' + greeting);
  *   }, function(reason) {
- *     // handle failure
+ *     alert('Failed: ' + reason);
  *   });
  * ```
  *
- * Note, progress/notify callbacks are not currently supported via the ES6-style interface.
+ * Note: progress/notify callbacks are not currently supported via the ES6-style interface.
  *
- * However, the more traditional CommonJS style usage is still available, and documented below.
+ * However, the more traditional CommonJS-style usage is still available, and documented below.
  *
  * [The CommonJS Promise proposal](http://wiki.commonjs.org/wiki/Promises) describes a promise as an
  * interface for interacting with an object that represents the result of an action that is
@@ -56,7 +63,7 @@
  * asynchronous programming what `try`, `catch` and `throw` keywords are to synchronous programming.
  *
  * ```js
- *   // for the purpose of this example let's assume that variables `$q`, `scope` and `okToGreet`
+ *   // for the purpose of this example let's assume that variables `$q` and `okToGreet`
  *   // are available in the current lexical scope (they could have been injected or passed in).
  *
  *   function asyncGreet(name) {
@@ -133,21 +140,19 @@
  *   provide a progress indication, before the promise is resolved or rejected.
  *
  *   This method *returns a new promise* which is resolved or rejected via the return value of the
- *   `successCallback`, `errorCallback`. It also notifies via the return value of the
- *   `notifyCallback` method. The promise can not be resolved or rejected from the notifyCallback
- *   method.
+ *   `successCallback`, `errorCallback` (unless that value is a promise, in which case it is resolved
+ *   with the value which is resolved in that promise using
+ *   [promise chaining](http://www.html5rocks.com/en/tutorials/es6/promises/#toc-promises-queues)).
+ *   It also notifies via the return value of the `notifyCallback` method. The promise cannot be
+ *   resolved or rejected from the notifyCallback method.
  *
  * - `catch(errorCallback)` – shorthand for `promise.then(null, errorCallback)`
  *
- * - `finally(callback)` – allows you to observe either the fulfillment or rejection of a promise,
+ * - `finally(callback, notifyCallback)` – allows you to observe either the fulfillment or rejection of a promise,
  *   but to do so without modifying the final value. This is useful to release resources or do some
  *   clean-up that needs to be done whether the promise was rejected or resolved. See the [full
  *   specification](https://github.com/kriskowal/q/wiki/API-Reference#promisefinallycallback) for
  *   more information.
- *
- *   Because `finally` is a reserved word in JavaScript and reserved keywords are not supported as
- *   property names by ES3, you'll need to invoke the method like `promise['finally'](callback)` to
- *   make your code IE8 and Android 2.x compatible.
  *
  * # Chaining promises
  *
@@ -204,7 +209,7 @@
  *  ```
  *
  * @param {function(function, function)} resolver Function which is responsible for resolving or
- *   rejecting the newly created promise. The first parameteter is a function which resolves the
+ *   rejecting the newly created promise. The first parameter is a function which resolves the
  *   promise, the second parameter is a function which rejects the promise.
  *
  * @returns {Promise} The newly created promise.
@@ -229,16 +234,29 @@ function $$QProvider() {
 /**
  * Constructs a promise manager.
  *
- * @param {function(Function)} nextTick Function for executing functions in the next turn.
+ * @param {function(function)} nextTick Function for executing functions in the next turn.
  * @param {function(...*)} exceptionHandler Function into which unexpected exceptions are passed for
  *     debugging purposes.
  * @returns {object} Promise manager.
  */
 function qFactory(nextTick, exceptionHandler) {
+  var $qMinErr = minErr('$q', TypeError);
+  function callOnce(self, resolveFn, rejectFn) {
+    var called = false;
+    function wrap(fn) {
+      return function(value) {
+        if (called) return;
+        called = true;
+        fn.call(self, value);
+      };
+    }
+
+    return [wrap(resolveFn), wrap(rejectFn)];
+  }
 
   /**
    * @ngdoc method
-   * @name $q#defer
+   * @name ng.$q#defer
    * @kind function
    *
    * @description
@@ -250,45 +268,17 @@ function qFactory(nextTick, exceptionHandler) {
     return new Deferred();
   };
 
-  function Promise () {
-    this.$$pending = [];
+  function Promise() {
+    this.$$state = { status: 0 };
   }
 
   Promise.prototype = {
-    then: function(callback, errback, progressback) {
+    then: function(onFulfilled, onRejected, progressBack) {
       var result = new Deferred();
 
-      var wrappedCallback = function(value) {
-        try {
-          result.resolve((isFunction(callback) ? callback : defaultCallback)(value));
-        } catch(e) {
-          result.reject(e);
-          exceptionHandler(e);
-        }
-      };
-
-      var wrappedErrback = function(reason) {
-        try {
-          result.resolve((isFunction(errback) ? errback : defaultErrback)(reason));
-        } catch(e) {
-          result.reject(e);
-          exceptionHandler(e);
-        }
-      };
-
-      var wrappedProgressback = function(progress) {
-        try {
-          result.notify((isFunction(progressback) ? progressback : defaultCallback)(progress));
-        } catch(e) {
-          exceptionHandler(e);
-        }
-      };
-
-      if (this.$$pending) {
-        this.$$pending.push([wrappedCallback, wrappedErrback, wrappedProgressback]);
-      } else {
-        this.$$value.then(wrappedCallback, wrappedErrback, wrappedProgressback);
-      }
+      this.$$state.pending = this.$$state.pending || [];
+      this.$$state.pending.push([result, onFulfilled, onRejected, progressBack]);
+      if (this.$$state.status > 0) scheduleProcessQueue(this.$$state);
 
       return result.promise;
     },
@@ -296,12 +286,13 @@ function qFactory(nextTick, exceptionHandler) {
     "catch": function(callback) {
       return this.then(null, callback);
     },
-    "finally": function(callback) {
+
+    "finally": function(callback, progressBack) {
       return this.then(function(value) {
         return handleCallback(value, true, callback);
       }, function(error) {
         return handleCallback(error, false, callback);
-      });
+      }, progressBack);
     }
   };
 
@@ -312,7 +303,37 @@ function qFactory(nextTick, exceptionHandler) {
     };
   }
 
-  function Deferred () {
+  function processQueue(state) {
+    var fn, deferred, pending;
+
+    pending = state.pending;
+    state.processScheduled = false;
+    state.pending = undefined;
+    for (var i = 0, ii = pending.length; i < ii; ++i) {
+      deferred = pending[i][0];
+      fn = pending[i][state.status];
+      try {
+        if (isFunction(fn)) {
+          deferred.resolve(fn(state.value));
+        } else if (state.status === 1) {
+          deferred.resolve(state.value);
+        } else {
+          deferred.reject(state.value);
+        }
+      } catch (e) {
+        deferred.reject(e);
+        exceptionHandler(e);
+      }
+    }
+  }
+
+  function scheduleProcessQueue(state) {
+    if (state.processScheduled || !state.pending) return;
+    state.processScheduled = true;
+    nextTick(function() { processQueue(state); });
+  }
+
+  function Deferred() {
     this.promise = new Promise();
     //Necessary to support unbound execution :/
     this.resolve = simpleBind(this, this.resolve);
@@ -322,55 +343,68 @@ function qFactory(nextTick, exceptionHandler) {
 
   Deferred.prototype = {
     resolve: function(val) {
-      if (this.promise.$$pending) {
-        var callbacks = this.promise.$$pending;
-        this.promise.$$pending = undefined;
-        this.promise.$$value = ref(val);
+      if (this.promise.$$state.status) return;
+      if (val === this.promise) {
+        this.$$reject($qMinErr(
+          'qcycle',
+          "Expected promise to be resolved with value other than itself '{0}'",
+          val));
+      } else {
+        this.$$resolve(val);
+      }
 
-        if (callbacks.length) {
-          nextTick(simpleBind(this, function() {
-            var callback;
-            for (var i = 0, ii = callbacks.length; i < ii; i++) {
-              callback = callbacks[i];
-              this.promise.$$value.then(callback[0], callback[1], callback[2]);
-            }
-          }));
+    },
+
+    $$resolve: function(val) {
+      var then, fns;
+
+      fns = callOnce(this, this.$$resolve, this.$$reject);
+      try {
+        if ((isObject(val) || isFunction(val))) then = val && val.then;
+        if (isFunction(then)) {
+          this.promise.$$state.status = -1;
+          then.call(val, fns[0], fns[1], this.notify);
+        } else {
+          this.promise.$$state.value = val;
+          this.promise.$$state.status = 1;
+          scheduleProcessQueue(this.promise.$$state);
         }
+      } catch (e) {
+        fns[1](e);
+        exceptionHandler(e);
       }
     },
-    reject: function(reason) {
-      this.resolve(createInternalRejectedPromise(reason));
-    },
-    notify: function(progress) {
-      if (this.promise.$$pending) {
-        var callbacks = this.promise.$$pending;
 
-        if (this.promise.$$pending.length) {
-          nextTick(function() {
-            var callback;
-            for (var i = 0, ii = callbacks.length; i < ii; i++) {
-              callback = callbacks[i];
-              callback[2](progress);
+    reject: function(reason) {
+      if (this.promise.$$state.status) return;
+      this.$$reject(reason);
+    },
+
+    $$reject: function(reason) {
+      this.promise.$$state.value = reason;
+      this.promise.$$state.status = 2;
+      scheduleProcessQueue(this.promise.$$state);
+    },
+
+    notify: function(progress) {
+      var callbacks = this.promise.$$state.pending;
+
+      if ((this.promise.$$state.status <= 0) && callbacks && callbacks.length) {
+        nextTick(function() {
+          var callback, result;
+          for (var i = 0, ii = callbacks.length; i < ii; i++) {
+            result = callbacks[i][0];
+            callback = callbacks[i][3];
+            try {
+              result.notify(isFunction(callback) ? callback(progress) : progress);
+            } catch (e) {
+              exceptionHandler(e);
             }
-          });
-        }
+          }
+        });
       }
     }
   };
-
-  var ref = function(value) {
-    if (isPromiseLike(value)) return value;
-    return {
-      then: function(callback) {
-        var result = new Deferred();
-        nextTick(function() {
-          result.resolve(callback(value));
-        });
-        return result.promise;
-      }
-    };
-  };
-
 
   /**
    * @ngdoc method
@@ -427,8 +461,8 @@ function qFactory(nextTick, exceptionHandler) {
   var handleCallback = function handleCallback(value, isResolved, callback) {
     var callbackOutput = null;
     try {
-      callbackOutput = (callback ||defaultCallback)();
-    } catch(e) {
+      if (isFunction(callback)) callbackOutput = callback();
+    } catch (e) {
       return makePromise(e, false);
     }
     if (isPromiseLike(callbackOutput)) {
@@ -441,24 +475,6 @@ function qFactory(nextTick, exceptionHandler) {
       return makePromise(value, isResolved);
     }
   };
-
-  var createInternalRejectedPromise = function(reason) {
-    return {
-      then: function(callback, errback) {
-        var result = new Deferred();
-        nextTick(function() {
-          try {
-            result.resolve((isFunction(errback) ? errback : defaultErrback)(reason));
-          } catch(e) {
-            result.reject(e);
-            exceptionHandler(e);
-          }
-        });
-        return result.promise;
-      }
-    };
-  };
-
 
   /**
    * @ngdoc method
@@ -473,64 +489,26 @@ function qFactory(nextTick, exceptionHandler) {
    * @param {*} value Value or a promise
    * @returns {Promise} Returns a promise of the passed value or promise
    */
-  var when = function(value, callback, errback, progressback) {
-    var result = new Deferred(),
-        done;
 
-    var wrappedCallback = function(value) {
-      try {
-        return (isFunction(callback) ? callback : defaultCallback)(value);
-      } catch (e) {
-        exceptionHandler(e);
-        return reject(e);
-      }
-    };
 
-    var wrappedErrback = function(reason) {
-      try {
-        return (isFunction(errback) ? errback : defaultErrback)(reason);
-      } catch (e) {
-        exceptionHandler(e);
-        return reject(e);
-      }
-    };
-
-    var wrappedProgressback = function(progress) {
-      try {
-        return (isFunction(progressback) ? progressback : defaultCallback)(progress);
-      } catch (e) {
-        exceptionHandler(e);
-      }
-    };
-
-    nextTick(function() {
-      ref(value).then(function(value) {
-        if (done) return;
-        done = true;
-        result.resolve(ref(value).then(wrappedCallback, wrappedErrback, wrappedProgressback));
-      }, function(reason) {
-        if (done) return;
-        done = true;
-        result.resolve(wrappedErrback(reason));
-      }, function(progress) {
-        if (done) return;
-        result.notify(wrappedProgressback(progress));
-      });
-    });
-
-    return result.promise;
+  var when = function(value, callback, errback, progressBack) {
+    var result = new Deferred();
+    result.resolve(value);
+    return result.promise.then(callback, errback, progressBack);
   };
 
-
-  function defaultCallback(value) {
-    return value;
-  }
-
-
-  function defaultErrback(reason) {
-    return reject(reason);
-  }
-
+  /**
+   * @ngdoc method
+   * @name $q#resolve
+   * @kind function
+   *
+   * @description
+   * Alias of {@link ng.$q#when when} to maintain naming consistency with ES6.
+   *
+   * @param {*} value Value or a promise
+   * @returns {Promise} Returns a promise of the passed value or promise
+   */
+  var resolve = when;
 
   /**
    * @ngdoc method
@@ -547,6 +525,7 @@ function qFactory(nextTick, exceptionHandler) {
    *   If any of the promises is resolved with a rejection, this resulting promise will be rejected
    *   with the same rejection value.
    */
+
   function all(promises) {
     var deferred = new Deferred(),
         counter = 0,
@@ -554,7 +533,7 @@ function qFactory(nextTick, exceptionHandler) {
 
     forEach(promises, function(promise, key) {
       counter++;
-      ref(promise).then(function(value) {
+      when(promise).then(function(value) {
         if (results.hasOwnProperty(key)) return;
         results[key] = value;
         if (!(--counter)) deferred.resolve(results);
@@ -573,8 +552,7 @@ function qFactory(nextTick, exceptionHandler) {
 
   var $Q = function Q(resolver) {
     if (!isFunction(resolver)) {
-      // TODO(@caitp): minErr this
-      throw new TypeError('Expected resolverFn');
+      throw $qMinErr('norslvr', "Expected resolverFn, got '{0}'", resolver);
     }
 
     if (!(this instanceof Q)) {
@@ -600,6 +578,7 @@ function qFactory(nextTick, exceptionHandler) {
   $Q.defer = defer;
   $Q.reject = reject;
   $Q.when = when;
+  $Q.resolve = resolve;
   $Q.all = all;
 
   return $Q;

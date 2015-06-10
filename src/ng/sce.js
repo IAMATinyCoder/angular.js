@@ -1,5 +1,16 @@
 'use strict';
 
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+ *     Any commits to this file should be reviewed with security in mind.  *
+ *   Changes to this file can potentially create security vulnerabilities. *
+ *          An approval from 2 Core members with history of modifying      *
+ *                         this file is required.                          *
+ *                                                                         *
+ *  Does the change somehow allow for arbitrary javascript to be executed? *
+ *    Or allows for someone to change the prototype of built-in objects?   *
+ *     Or gives undesired access to variables likes document or window?    *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
 var $sceMinErr = minErr('$sce');
 
 var SCE_CONTEXTS = {
@@ -13,15 +24,6 @@ var SCE_CONTEXTS = {
 };
 
 // Helper functions follow.
-
-// Copied from:
-// http://docs.closure-library.googlecode.com/git/closure_goog_string_string.js.source.html#line962
-// Prereq: s is a string.
-function escapeForRegexp(s) {
-  return s.replace(/([-()\[\]{}+?*.$\^|,:#<!\\])/g, '\\$1').
-           replace(/\x08/g, '\\x08');
-}
-
 
 function adjustMatcher(matcher) {
   if (matcher === 'self') {
@@ -158,7 +160,7 @@ function $SceDelegateProvider() {
    * @description
    * Sets/Gets the whitelist of trusted resource URLs.
    */
-  this.resourceUrlWhitelist = function (value) {
+  this.resourceUrlWhitelist = function(value) {
     if (arguments.length) {
       resourceUrlWhitelist = adjustMatchers(value);
     }
@@ -192,7 +194,7 @@ function $SceDelegateProvider() {
    * Sets/Gets the blacklist of trusted resource URLs.
    */
 
-  this.resourceUrlBlacklist = function (value) {
+  this.resourceUrlBlacklist = function(value) {
     if (arguments.length) {
       resourceUrlBlacklist = adjustMatchers(value);
     }
@@ -410,7 +412,7 @@ function $SceDelegateProvider() {
  *
  * As of version 1.2, Angular ships with SCE enabled by default.
  *
- * Note:  When enabled (the default), IE8 in quirks mode is not supported.  In this mode, IE8 allows
+ * Note:  When enabled (the default), IE<11 in quirks mode is not supported.  In this mode, IE<11 allow
  * one to execute arbitrary javascript by the use of the expression() syntax.  Refer
  * <http://blogs.msdn.com/b/ie/archive/2008/10/16/ending-expressions.aspx> to learn more about them.
  * You can ensure your document is in standards mode and not quirks mode by adding `<!doctype html>`
@@ -422,7 +424,7 @@ function $SceDelegateProvider() {
  * Here's an example of a binding in a privileged context:
  *
  * ```
- * <input ng-model="userHtml">
+ * <input ng-model="userHtml" aria-label="User input">
  * <div ng-bind-html="userHtml"></div>
  * ```
  *
@@ -457,7 +459,7 @@ function $SceDelegateProvider() {
  *
  * In privileged contexts, directives and code will bind to the result of {@link ng.$sce#getTrusted
  * $sce.getTrusted(context, value)} rather than to the value directly.  Directives use {@link
- * ng.$sce#parse $sce.parseAs} rather than `$parse` to watch attribute bindings, which performs the
+ * ng.$sce#parseAs $sce.parseAs} rather than `$parse` to watch attribute bindings, which performs the
  * {@link ng.$sce#getTrusted $sce.getTrusted} behind the scenes on non-constant literals.
  *
  * As an example, {@link ng.directive:ngBindHtml ngBindHtml} uses {@link
@@ -673,7 +675,7 @@ function $SceProvider() {
    * @description
    * Enables/disables SCE and returns the current value.
    */
-  this.enabled = function (value) {
+  this.enabled = function(value) {
     if (arguments.length) {
       enabled = !!value;
     }
@@ -727,13 +729,13 @@ function $SceProvider() {
    * sce.js and sceSpecs.js would need to be aware of this detail.
    */
 
-  this.$get = ['$parse', '$sniffer', '$sceDelegate', function(
-                $parse,   $sniffer,   $sceDelegate) {
-    // Prereq: Ensure that we're not running in IE8 quirks mode.  In that mode, IE allows
+  this.$get = ['$parse', '$sceDelegate', function(
+                $parse,   $sceDelegate) {
+    // Prereq: Ensure that we're not running in IE<11 quirks mode.  In that mode, IE < 11 allow
     // the "expression(javascript expression)" syntax which is insecure.
-    if (enabled && $sniffer.msie && $sniffer.msieDocumentMode < 8) {
+    if (enabled && msie < 8) {
       throw $sceMinErr('iequirks',
-        'Strict Contextual Escaping does not support Internet Explorer version < 9 in quirks ' +
+        'Strict Contextual Escaping does not support Internet Explorer version < 11 in quirks ' +
         'mode.  You can fix this by adding the text <!doctype html> to the top of your HTML ' +
         'document.  See http://docs.angularjs.org/api/ng.$sce for more information.');
     }
@@ -751,7 +753,7 @@ function $SceProvider() {
      * @description
      * Returns a boolean indicating if SCE is enabled.
      */
-    sce.isEnabled = function () {
+    sce.isEnabled = function() {
       return enabled;
     };
     sce.trustAs = $sceDelegate.trustAs;
@@ -787,7 +789,7 @@ function $SceProvider() {
       if (parsed.literal && parsed.constant) {
         return parsed;
       } else {
-        return $parse(expr, function (value) {
+        return $parse(expr, function(value) {
           return sce.getTrusted(type, value);
         });
       }
@@ -806,7 +808,7 @@ function $SceProvider() {
      * escaping.
      *
      * @param {string} type The kind of context in which this value is safe for use.  e.g. url,
-     *   resource_url, html, js and css.
+     *   resourceUrl, html, js and css.
      * @param {*} value The value that that should be considered trusted/safe.
      * @returns {*} A value that can be used to stand in for the provided `value` in places
      * where Angular expects a $sce.trustAs() return value.
@@ -956,7 +958,7 @@ function $SceProvider() {
      *
      * @description
      * Shorthand method.  `$sce.parseAsHtml(expression string)` →
-     *     {@link ng.$sce#parse `$sce.parseAs($sce.HTML, value)`}
+     *     {@link ng.$sce#parseAs `$sce.parseAs($sce.HTML, value)`}
      *
      * @param {string} expression String expression to compile.
      * @returns {function(context, locals)} a function which represents the compiled expression:
@@ -973,7 +975,7 @@ function $SceProvider() {
      *
      * @description
      * Shorthand method.  `$sce.parseAsCss(value)` →
-     *     {@link ng.$sce#parse `$sce.parseAs($sce.CSS, value)`}
+     *     {@link ng.$sce#parseAs `$sce.parseAs($sce.CSS, value)`}
      *
      * @param {string} expression String expression to compile.
      * @returns {function(context, locals)} a function which represents the compiled expression:
@@ -990,7 +992,7 @@ function $SceProvider() {
      *
      * @description
      * Shorthand method.  `$sce.parseAsUrl(value)` →
-     *     {@link ng.$sce#parse `$sce.parseAs($sce.URL, value)`}
+     *     {@link ng.$sce#parseAs `$sce.parseAs($sce.URL, value)`}
      *
      * @param {string} expression String expression to compile.
      * @returns {function(context, locals)} a function which represents the compiled expression:
@@ -1007,7 +1009,7 @@ function $SceProvider() {
      *
      * @description
      * Shorthand method.  `$sce.parseAsResourceUrl(value)` →
-     *     {@link ng.$sce#parse `$sce.parseAs($sce.RESOURCE_URL, value)`}
+     *     {@link ng.$sce#parseAs `$sce.parseAs($sce.RESOURCE_URL, value)`}
      *
      * @param {string} expression String expression to compile.
      * @returns {function(context, locals)} a function which represents the compiled expression:
@@ -1024,7 +1026,7 @@ function $SceProvider() {
      *
      * @description
      * Shorthand method.  `$sce.parseAsJs(value)` →
-     *     {@link ng.$sce#parse `$sce.parseAs($sce.JS, value)`}
+     *     {@link ng.$sce#parseAs `$sce.parseAs($sce.JS, value)`}
      *
      * @param {string} expression String expression to compile.
      * @returns {function(context, locals)} a function which represents the compiled expression:
@@ -1040,15 +1042,15 @@ function $SceProvider() {
         getTrusted = sce.getTrusted,
         trustAs = sce.trustAs;
 
-    forEach(SCE_CONTEXTS, function (enumValue, name) {
+    forEach(SCE_CONTEXTS, function(enumValue, name) {
       var lName = lowercase(name);
-      sce[camelCase("parse_as_" + lName)] = function (expr) {
+      sce[camelCase("parse_as_" + lName)] = function(expr) {
         return parse(enumValue, expr);
       };
-      sce[camelCase("get_trusted_" + lName)] = function (value) {
+      sce[camelCase("get_trusted_" + lName)] = function(value) {
         return getTrusted(enumValue, value);
       };
-      sce[camelCase("trust_as_" + lName)] = function (value) {
+      sce[camelCase("trust_as_" + lName)] = function(value) {
         return trustAs(enumValue, value);
       };
     });

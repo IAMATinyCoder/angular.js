@@ -57,6 +57,8 @@
 
   $AnchorScrollProvider,
   $AnimateProvider,
+  $$CoreAnimateQueueProvider,
+  $$CoreAnimateRunnerProvider,
   $BrowserProvider,
   $CacheFactoryProvider,
   $ControllerProvider,
@@ -65,7 +67,10 @@
   $FilterProvider,
   $InterpolateProvider,
   $IntervalProvider,
+  $$HashMapProvider,
   $HttpProvider,
+  $HttpParamSerializerProvider,
+  $HttpParamSerializerJQLikeProvider,
   $HttpBackendProvider,
   $LocationProvider,
   $LogProvider,
@@ -78,10 +83,14 @@
   $SceDelegateProvider,
   $SnifferProvider,
   $TemplateCacheProvider,
+  $TemplateRequestProvider,
+  $$TestabilityProvider,
   $TimeoutProvider,
   $$RAFProvider,
   $$AsyncCallbackProvider,
-  $WindowProvider
+  $WindowProvider,
+  $$jqLiteProvider,
+  $$CookieReaderProvider
 */
 
 
@@ -108,11 +117,12 @@ var version = {
 };
 
 
-function publishExternalAPI(angular){
+function publishExternalAPI(angular) {
   extend(angular, {
     'bootstrap': bootstrap,
     'copy': copy,
     'extend': extend,
+    'merge': merge,
     'equals': equals,
     'element': jqLite,
     'forEach': forEach,
@@ -135,8 +145,10 @@ function publishExternalAPI(angular){
     'lowercase': lowercase,
     'uppercase': uppercase,
     'callbacks': {counter: 0},
+    'getTestability': getTestability,
     '$$minErr': minErr,
-    '$$csp': csp
+    '$$csp': csp,
+    'reloadWithDebugInfo': reloadWithDebugInfo
   });
 
   angularModule = setupModuleLoader(window);
@@ -207,6 +219,8 @@ function publishExternalAPI(angular){
       $provide.provider({
         $anchorScroll: $AnchorScrollProvider,
         $animate: $AnimateProvider,
+        $$animateQueue: $$CoreAnimateQueueProvider,
+        $$AnimateRunner: $$CoreAnimateRunnerProvider,
         $browser: $BrowserProvider,
         $cacheFactory: $CacheFactoryProvider,
         $controller: $ControllerProvider,
@@ -216,6 +230,8 @@ function publishExternalAPI(angular){
         $interpolate: $InterpolateProvider,
         $interval: $IntervalProvider,
         $http: $HttpProvider,
+        $httpParamSerializer: $HttpParamSerializerProvider,
+        $httpParamSerializerJQLike: $HttpParamSerializerJQLikeProvider,
         $httpBackend: $HttpBackendProvider,
         $location: $LocationProvider,
         $log: $LogProvider,
@@ -227,10 +243,15 @@ function publishExternalAPI(angular){
         $sceDelegate: $SceDelegateProvider,
         $sniffer: $SnifferProvider,
         $templateCache: $TemplateCacheProvider,
+        $templateRequest: $TemplateRequestProvider,
+        $$testability: $$TestabilityProvider,
         $timeout: $TimeoutProvider,
         $window: $WindowProvider,
         $$rAF: $$RAFProvider,
-        $$asyncCallback : $$AsyncCallbackProvider
+        $$asyncCallback: $$AsyncCallbackProvider,
+        $$jqLite: $$jqLiteProvider,
+        $$HashMap: $$HashMapProvider,
+        $$cookieReader: $$CookieReaderProvider
       });
     }
   ]);

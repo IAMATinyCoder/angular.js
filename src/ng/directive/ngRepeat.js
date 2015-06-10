@@ -23,6 +23,89 @@
  * Creating aliases for these properties is possible with {@link ng.directive:ngInit `ngInit`}.
  * This may be useful when, for instance, nesting ngRepeats.
  *
+ *
+ * # Iterating over object properties
+ *
+ * It is possible to get `ngRepeat` to iterate over the properties of an object using the following
+ * syntax:
+ *
+ * ```js
+ * <div ng-repeat="(key, value) in myObj"> ... </div>
+ * ```
+ *
+ * You need to be aware that the JavaScript specification does not define the order of keys
+ * returned for an object. (To mitigate this in Angular 1.3 the `ngRepeat` directive
+ * used to sort the keys alphabetically.)
+ *
+ * Version 1.4 removed the alphabetic sorting. We now rely on the order returned by the browser
+ * when running `for key in myObj`. It seems that browsers generally follow the strategy of providing
+ * keys in the order in which they were defined, although there are exceptions when keys are deleted
+ * and reinstated. See https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/delete#Cross-browser_issues
+ *
+ * If this is not desired, the recommended workaround is to convert your object into an array
+ * that is sorted into the order that you prefer before providing it to `ngRepeat`.  You could
+ * do this with a filter such as [toArrayFilter](http://ngmodules.org/modules/angular-toArrayFilter)
+ * or implement a `$watch` on the object yourself.
+ *
+ *
+ * # Tracking and Duplicates
+ *
+ * When the contents of the collection change, `ngRepeat` makes the corresponding changes to the DOM:
+ *
+ * * When an item is added, a new instance of the template is added to the DOM.
+ * * When an item is removed, its template instance is removed from the DOM.
+ * * When items are reordered, their respective templates are reordered in the DOM.
+ *
+ * By default, `ngRepeat` does not allow duplicate items in arrays. This is because when
+ * there are duplicates, it is not possible to maintain a one-to-one mapping between collection
+ * items and DOM elements.
+ *
+ * If you do need to repeat duplicate items, you can substitute the default tracking behavior
+ * with your own using the `track by` expression.
+ *
+ * For example, you may track items by the index of each item in the collection, using the
+ * special scope property `$index`:
+ * ```html
+ *    <div ng-repeat="n in [42, 42, 43, 43] track by $index">
+ *      {{n}}
+ *    </div>
+ * ```
+ *
+ * You may use arbitrary expressions in `track by`, including references to custom functions
+ * on the scope:
+ * ```html
+ *    <div ng-repeat="n in [42, 42, 43, 43] track by myTrackingFunction(n)">
+ *      {{n}}
+ *    </div>
+ * ```
+ *
+ * If you are working with objects that have an identifier property, you can track
+ * by the identifier instead of the whole object. Should you reload your data later, `ngRepeat`
+ * will not have to rebuild the DOM elements for items it has already rendered, even if the
+ * JavaScript objects in the collection have been substituted for new ones:
+ * ```html
+ *    <div ng-repeat="model in collection track by model.id">
+ *      {{model.name}}
+ *    </div>
+ * ```
+ *
+ * When no `track by` expression is provided, it is equivalent to tracking by the built-in
+ * `$id` function, which tracks items by their identity:
+ * ```html
+ *    <div ng-repeat="obj in collection track by $id(obj)">
+ *      {{obj.prop}}
+ *    </div>
+ * ```
+ *
+ * <div class="alert alert-warning">
+ * **Note:** `track by` must always be the last expression:
+ * </div>
+ * ```
+ * <div ng-repeat="model in collection | orderBy: 'id' as filtered_result track by model.id">
+ *     {{model.name}}
+ * </div>
+ * ```
+ *
  * # Special repeat start and end points
  * To repeat a series of elements instead of just one parent element, ngRepeat (as well as other ng directives) supports extending
  * the range of the repeater by defining explicit start and end points by using **ng-repeat-start** and **ng-repeat-end** respectively.
@@ -90,22 +173,16 @@
  *
  *     For example: `(name, age) in {'adam':10, 'amalie':12}`.
  *
- *   * `variable in expression track by tracking_expression` – You can also provide an optional tracking function
- *     which can be used to associate the objects in the collection with the DOM elements. If no tracking function
- *     is specified the ng-repeat associates elements by identity in the collection. It is an error to have
- *     more than one tracking function to resolve to the same key. (This would mean that two distinct objects are
- *     mapped to the same DOM element, which is not possible.)  Filters should be applied to the expression,
- *     before specifying a tracking expression.
+ *   * `variable in expression track by tracking_expression` – You can also provide an optional tracking expression
+ *     which can be used to associate the objects in the collection with the DOM elements. If no tracking expression
+ *     is specified, ng-repeat associates elements by identity. It is an error to have
+ *     more than one tracking expression value resolve to the same key. (This would mean that two distinct objects are
+ *     mapped to the same DOM element, which is not possible.)
+ *
+ *     Note that the tracking expression must come last, after any filters, and the alias expression.
  *
  *     For example: `item in items` is equivalent to `item in items track by $id(item)`. This implies that the DOM elements
  *     will be associated by item identity in the array.
- *
- *   * `variable in expression as alias_expression` – You can also provide an optional alias expression which will then store the
- *     intermediate results of the repeater after the filters have been applied. Typically this is used to render a special message
- *     when a filter is active on the repeater, but the filtered result set is empty.
- *
- *     For example: `item in items | filter:x as results` will store the fragment of the repeated items as `results`, but only after
- *     the items have been processed through the filter.
  *
  *     For example: `item in items track by $id(item)`. A built in `$id()` function can be used to assign a unique
  *     `$$hashKey` property to each item in the array. This property is then used as a key to associated DOM elements
@@ -118,6 +195,18 @@
  *
  *     For example: `item in items | filter:searchText track by item.id` is a pattern that might be used to apply a filter
  *     to items in conjunction with a tracking expression.
+ *
+ *   * `variable in expression as alias_expression` – You can also provide an optional alias expression which will then store the
+ *     intermediate results of the repeater after the filters have been applied. Typically this is used to render a special message
+ *     when a filter is active on the repeater, but the filtered result set is empty.
+ *
+ *     For example: `item in items | filter:x as results` will store the fragment of the repeated items as `results`, but only after
+ *     the items have been processed through the filter.
+ *
+ *     Please note that `as [variable name] is not an operator but rather a part of ngRepeat micro-syntax so it can be used only at the end
+ *     (and not as operator, inside an expression).
+ *
+ *     For example: `item in items | filter : x | orderBy : order | limitTo : limit as results` .
  *
  * @example
  * This example initializes the scope to a list of names and
@@ -137,7 +226,7 @@
         {name:'Samantha', age:60, gender:'girl'}
       ]">
         I have {{friends.length}} friends. They are:
-        <input type="search" ng-model="q" placeholder="filter friends..." />
+        <input type="search" ng-model="q" placeholder="filter friends..." aria-label="filter friends" />
         <ul class="example-animate-container">
           <li class="animate-repeat" ng-repeat="friend in friends | filter:q as results">
             [{{$index + 1}}] {{friend.name}} who is {{friend.age}} years old.
@@ -257,7 +346,7 @@ var ngRepeatDirective = ['$parse', '$animate', function($parse, $animate) {
       var aliasAs = match[3];
       var trackByExp = match[4];
 
-      match = lhs.match(/^(?:([\$\w]+)|\(([\$\w]+)\s*,\s*([\$\w]+)\))$/);
+      match = lhs.match(/^(?:(\s*[\$\w]+)|\(\s*([\$\w]+)\s*,\s*([\$\w]+)\s*\))$/);
 
       if (!match) {
         throw ngRepeatMinErr('iidexp', "'_item_' in '_item_ in _collection_' should be an identifier or '(_key_, _value_)' expression, but got '{0}'.",
@@ -266,16 +355,22 @@ var ngRepeatDirective = ['$parse', '$animate', function($parse, $animate) {
       var valueIdentifier = match[3] || match[1];
       var keyIdentifier = match[2];
 
+      if (aliasAs && (!/^[$a-zA-Z_][$a-zA-Z0-9_]*$/.test(aliasAs) ||
+          /^(null|undefined|this|\$index|\$first|\$middle|\$last|\$even|\$odd|\$parent|\$root|\$id)$/.test(aliasAs))) {
+        throw ngRepeatMinErr('badident', "alias '{0}' is invalid --- must be a valid JS identifier which is not a reserved name.",
+          aliasAs);
+      }
+
       var trackByExpGetter, trackByIdExpFn, trackByIdArrayFn, trackByIdObjFn;
       var hashFnLocals = {$id: hashKey};
 
       if (trackByExp) {
         trackByExpGetter = $parse(trackByExp);
       } else {
-        trackByIdArrayFn = function (key, value) {
+        trackByIdArrayFn = function(key, value) {
           return hashKey(value);
         };
-        trackByIdObjFn = function (key) {
+        trackByIdObjFn = function(key) {
           return key;
         };
       }
@@ -305,18 +400,19 @@ var ngRepeatDirective = ['$parse', '$animate', function($parse, $animate) {
         //watch props
         $scope.$watchCollection(rhs, function ngRepeatAction(collection) {
           var index, length,
-              previousNode = $element[0],     // current position of the node
+              previousNode = $element[0],     // node that cloned nodes should be inserted after
+                                              // initialized to the comment node anchor
               nextNode,
               // Same as lastBlockMap but it has the current state. It will become the
               // lastBlockMap on the next iteration.
               nextBlockMap = createMap(),
-              arrayLength,
+              collectionLength,
               key, value, // key/value of iteration
               trackById,
               trackByIdFn,
               collectionKeys,
               block,       // last object information {scope, element, id}
-              nextBlockOrder = [],
+              nextBlockOrder,
               elementsToRemove;
 
           if (aliasAs) {
@@ -328,21 +424,20 @@ var ngRepeatDirective = ['$parse', '$animate', function($parse, $animate) {
             trackByIdFn = trackByIdExpFn || trackByIdArrayFn;
           } else {
             trackByIdFn = trackByIdExpFn || trackByIdObjFn;
-            // if object, extract keys, sort them and use to determine order of iteration over obj props
+            // if object, extract keys, in enumeration order, unsorted
             collectionKeys = [];
             for (var itemKey in collection) {
-              if (collection.hasOwnProperty(itemKey) && itemKey.charAt(0) != '$') {
+              if (collection.hasOwnProperty(itemKey) && itemKey.charAt(0) !== '$') {
                 collectionKeys.push(itemKey);
               }
             }
-            collectionKeys.sort();
           }
 
-          arrayLength = collectionKeys.length;
+          collectionLength = collectionKeys.length;
+          nextBlockOrder = new Array(collectionLength);
 
           // locate existing items
-          length = nextBlockOrder.length = collectionKeys.length;
-          for (index = 0; index < length; index++) {
+          for (index = 0; index < collectionLength; index++) {
             key = (collection === collectionKeys) ? index : collectionKeys[index];
             value = collection[key];
             trackById = trackByIdFn(key, value, index);
@@ -353,12 +448,13 @@ var ngRepeatDirective = ['$parse', '$animate', function($parse, $animate) {
               nextBlockMap[trackById] = block;
               nextBlockOrder[index] = block;
             } else if (nextBlockMap[trackById]) {
-              // id collision detected. restore lastBlockMap and throw an error
-              forEach(nextBlockOrder, function (block) {
+              // if collision detected. restore lastBlockMap and throw an error
+              forEach(nextBlockOrder, function(block) {
                 if (block && block.scope) lastBlockMap[block.id] = block;
               });
-              throw ngRepeatMinErr('dupes', "Duplicates in a repeater are not allowed. Use 'track by' expression to specify unique keys. Repeater: {0}, Duplicate key: {1}",
-                  expression, trackById);
+              throw ngRepeatMinErr('dupes',
+                  "Duplicates in a repeater are not allowed. Use 'track by' expression to specify unique keys. Repeater: {0}, Duplicate key: {1}, Duplicate value: {2}",
+                  expression, trackById, value);
             } else {
               // new never before seen block
               nextBlockOrder[index] = {id: trackById, scope: undefined, clone: undefined};
@@ -371,7 +467,7 @@ var ngRepeatDirective = ['$parse', '$animate', function($parse, $animate) {
             block = lastBlockMap[blockKey];
             elementsToRemove = getBlockNodes(block.clone);
             $animate.leave(elementsToRemove);
-            if (elementsToRemove[0].parent) {
+            if (elementsToRemove[0].parentNode) {
               // if the element was not removed yet because of pending animation, mark it as deleted
               // so that we can ignore it later
               for (index = 0, length = elementsToRemove.length; index < length; index++) {
@@ -382,16 +478,18 @@ var ngRepeatDirective = ['$parse', '$animate', function($parse, $animate) {
           }
 
           // we are not using forEach for perf reasons (trying to avoid #call)
-          for (index = 0, length = collectionKeys.length; index < length; index++) {
+          for (index = 0; index < collectionLength; index++) {
             key = (collection === collectionKeys) ? index : collectionKeys[index];
             value = collection[key];
             block = nextBlockOrder[index];
-            if (nextBlockOrder[index - 1]) previousNode = getBlockEnd(nextBlockOrder[index - 1]);
 
             if (block.scope) {
               // if we have already seen this object, then we need to reuse the
               // associated scope/element
+
               nextNode = previousNode;
+
+              // skip nodes that are already pending removal via leave animation
               do {
                 nextNode = nextNode.nextSibling;
               } while (nextNode && nextNode[NG_REMOVED]);
@@ -401,21 +499,24 @@ var ngRepeatDirective = ['$parse', '$animate', function($parse, $animate) {
                 $animate.move(getBlockNodes(block.clone), null, jqLite(previousNode));
               }
               previousNode = getBlockEnd(block);
-              updateScope(block.scope, index, valueIdentifier, value, keyIdentifier, key, arrayLength);
+              updateScope(block.scope, index, valueIdentifier, value, keyIdentifier, key, collectionLength);
             } else {
               // new item which we don't know about
               $transclude(function ngRepeatTransclude(clone, scope) {
                 block.scope = scope;
                 // http://jsperf.com/clone-vs-createcomment
-                clone[clone.length++] = ngRepeatEndComment.cloneNode();
+                var endNode = ngRepeatEndComment.cloneNode(false);
+                clone[clone.length++] = endNode;
+
+                // TODO(perf): support naked previousNode in `enter` to avoid creation of jqLite wrapper?
                 $animate.enter(clone, null, jqLite(previousNode));
-                previousNode = clone;
+                previousNode = endNode;
                 // Note: We only need the first/last node of the cloned nodes.
                 // However, we need to keep the reference to the jqlite wrapper as it might be changed later
                 // by a directive with templateUrl when its template arrives.
                 block.clone = clone;
                 nextBlockMap[block.id] = block;
-                updateScope(block.scope, index, valueIdentifier, value, keyIdentifier, key, arrayLength);
+                updateScope(block.scope, index, valueIdentifier, value, keyIdentifier, key, collectionLength);
               });
             }
           }
@@ -425,4 +526,3 @@ var ngRepeatDirective = ['$parse', '$animate', function($parse, $animate) {
     }
   };
 }];
-
